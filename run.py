@@ -160,16 +160,34 @@ def viewer(sim, args):
     pygame.init()
     cfg = w.cfg
     info = pygame.display.Info()
-    scale = args.scale or max(1, min((info.current_h - 120) // cfg.H, (info.current_w - 420) // cfg.W))
-    panel = 380
-    screen = pygame.display.set_mode((cfg.W * scale + panel, max(cfg.H * scale, 960)))
+    # Fit everything on the screen: leave room for the taskbar and the title bar, use
+    # a second panel column when the stats would not fit in one, and shrink the world
+    # view below 1 pixel per cell when it is bigger than the screen (zoom shows detail).
+    sw, sh = (info.current_w, info.current_h) if info.current_w > 0 else (1920, 1080)
+    avail_w, avail_h = sw - 40, sh - 110
+    n_lines = 7 + len(LABELS)
+    extra_h = 5 * 40 + 140                      # sparklines + genome inspector
+    # pick the largest line height (12..16) that lets everything fit in one column
+    line_h = int(max(12, min(16, (avail_h - extra_h - 16) / n_lines)))
+    text_h = n_lines * line_h + 16
+    two_col = text_h + extra_h > avail_h
+    panel = 760 if two_col else 380
+    if args.scale:
+        scale = float(args.scale)
+    else:
+        scale = min(avail_h / cfg.H, (avail_w - panel) / cfg.W)
+        scale = float(int(scale)) if scale >= 1 else scale
+    VW, VH = max(1, int(cfg.W * scale)), max(1, int(cfg.H * scale))   # viewport in pixels
+    need_h = text_h if two_col else text_h + extra_h
+    win_h = min(avail_h, max(VH, need_h))
+    os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
+    screen = pygame.display.set_mode((VW + panel, win_h))
     pygame.display.set_caption("Emergence 2")
-    font = pygame.font.SysFont("consolas,menlo,monospace", 14)
+    font = pygame.font.SysFont("consolas,menlo,monospace", line_h - 2)
     small = pygame.font.SysFont("consolas,menlo,monospace", 12)
     clock = pygame.time.Clock()
 
     view, paused, spf, brush, show_panel = "life", False, 2, 10, True
-    VW, VH = cfg.W * scale, cfg.H * scale            # viewport in screen pixels
     cams = [(0, 0, cfg.H, cfg.W)]                     # zoom stack: (y0, x0, h, w) in cells
     selecting = False                                 # zoom box follows the mouse
     box_w = max(16, cfg.W // 4)                       # zoom box width in cells
@@ -313,7 +331,10 @@ def viewer(sim, args):
         img = sim.render(view, region=(cy0, cy0 + ch, cx0, cx0 + cw))
         surf = pygame.surfarray.make_surface(np.ascontiguousarray(img.transpose(1, 0, 2)))
         if (cw, ch) != (VW, VH):
-            surf = pygame.transform.scale(surf, (VW, VH))
+            if cw > VW or ch > VH:
+                surf = pygame.transform.smoothscale(surf, (VW, VH))   # shrinking: average
+            else:
+                surf = pygame.transform.scale(surf, (VW, VH))         # enlarging: crisp cells
         if rec is not None:
             rec.append_data(pygame.surfarray.array3d(surf).transpose(1, 0, 2))
         screen.fill((14, 14, 18))
@@ -333,7 +354,7 @@ def viewer(sim, args):
         screen.set_clip(None)
 
         if show_panel:
-            x0, y = cfg.W * scale + 14, 10
+            x0, y = VW + 14, 10
             hs = ("" if sim.hu is None else
                   ("   learning" if sim.hu.hc.learn else "   learning OFF"))
             lines = [f"EMERGENCE 2   t={w.t}" + hs, f"view [{VIEWS.index(view)+1}] {view}",
@@ -353,8 +374,10 @@ def viewer(sim, args):
                 if v is not None:
                     lines.append(f"{lab:<22}{v:.3g}" if isinstance(v, float) else f"{lab:<22}{v}")
             for ln in lines:
-                screen.blit(font.render(ln, True, (220, 220, 225)), (x0, y)); y += 16
+                screen.blit(font.render(ln, True, (220, 220, 225)), (x0, y)); y += line_h
             y += 6
+            if two_col:                       # graphs and inspector go to the second column
+                x0, y = VW + 14 + 380, 10
             for k, series in hist.items():
                 if len(series) > 1:
                     lo, hi = min(series), max(series)
@@ -363,7 +386,7 @@ def viewer(sim, args):
                     pygame.draw.lines(screen, (120, 200, 255), False, pts, 1)
                     screen.blit(small.render(f"{k}  {lo:.3g}..{hi:.3g}", True, (150, 150, 160)),
                                 (x0, y + 26))
-                y += 42
+                y += 40
             if inspect is not None and int(w.pool.count[inspect]) > 0:
                 p = w.pool
                 screen.blit(font.render(f"genome #{inspect}  cells={int(p.count[inspect])}",
@@ -411,7 +434,7 @@ def main():
     ap.add_argument("--ckpt-every", type=int, default=50000)
     ap.add_argument("--video", action="store_true")
     ap.add_argument("--video-every", type=int, default=20)
-    ap.add_argument("--scale", type=int, default=0)
+    ap.add_argument("--scale", type=float, default=0, help="pixels per cell (default: fit the screen)")
     args = ap.parse_args()
     sim = build(args)
     if args.headless:

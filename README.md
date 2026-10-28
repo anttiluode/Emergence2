@@ -27,8 +27,10 @@ level 1   CELLS ─── token genomes → transformer → cell behaviour; evol
 
 What this sets up, in the order it could happen:
 
-1. **The hunters must model the world to eat.** Organisms, rings, fronts and suns are
-   never named to them. If they help to find energy, the brain has a reason to build them.
+1. **The hunters may have to model the world to eat.** Organisms, rings, fronts and suns
+   are never named to them. If knowing them helps find energy, the brain has a reason to
+   build them; if a simple habit (walk straight, stay on tissue) is enough, it won't.
+   That is a hypothesis, and the straight-walking control below is how to test it.
 2. **We can check whether it did.** Level 1 records the answer key: every cell's body,
    clade, age, and where the suns are. `probe.py` asks whether the hunters' memory encodes
    those things, against the raw observation and against an untrained twin brain.
@@ -75,9 +77,24 @@ until a hunter comes near.
 | birth | above energy 5 it splits; the child is born 5–10 cells away with half the energy and an empty memory |
 | floor | if fewer than 16 hunters are alive, new ones appear at random (counted as respawns) |
 | brain | shared by all hunters: conv encoder on the 15x15x10 patch, GRU(256) memory, heads for policy (5 moves x mark or not), value, and a world model that predicts the change of the next patch and the reward |
+| controls | `--hset policy=random` (uniform actions) and `--hset policy=straight` (persistent heading) |
 | learning | advantage actor-critic on the energy actually gained (rollouts of 16 steps, GAE, entropy bonus 0.03), plus the world-model loss, Adam 5e-4; runs live inside the simulation |
 
 Reward is energy in minus energy spent. Nobody rewards the hunters for anything else.
+
+## Measurement fixes (after review)
+
+- `probe.py` now feeds the untrained twin the exact observation the hunters act on, at
+  the same moment, and takes the raw features, the labels and the trained memory from
+  that same moment (before the hunter moves). Earlier the twin saw the world one step
+  earlier than the trained brain.
+- `harvest_per_hunter` is now energy bitten per hunter-step actually lived in the
+  interval. Earlier it divided by the hunter count at the end of the interval, which is
+  wrong while the population swings.
+- New control policy `straight` (`--hset policy=straight`): keeps a heading, turns at
+  random 5% of the time, never marks.
+- To show that hunters *use* the marks, not just write them, the test is to keep the
+  trained brain and scramble the mark channel it reads. Not built yet.
 
 ## What I could check here (CPU only, small worlds)
 
@@ -100,6 +117,14 @@ the machinery works; they say nothing yet about what a long run on your GPU will
   about 15 and 80 on a 128x128 world, with or without learning, like predator–prey
   cycles. Over 2,000–3,000 steps (fewer than 200 brain updates) the learning hunters did
   not yet clearly beat random ones in that setting. That needs the long runs.
+- **Judge foragers by how many of them the world can feed, not by harvest per hunter.**
+  Once the population settles, births balance deaths, so harvest per hunter-step
+  settles at the cost of living (about 0.22) for any policy. What a better forager
+  changes is the number of hunters the same prey can carry. Over 2,000 steps on the same
+  128x128 world: random walkers held **18–31** hunters and needed respawns; hunters that
+  simply **walk straight and turn now and then (5% per step)** held **58–72** with none.
+  Walking straight roughly doubles the carrying capacity. That is the bar a learned
+  brain has to clear, not random.
 - **The world model has not yet beaten "nothing changes".** Its error stayed level with
   the copy-the-last-frame baseline in every short run. It now starts exactly at that
   baseline, so any later drop is learned.
@@ -110,7 +135,7 @@ the machinery works; they say nothing yet about what a long run on your GPU will
 
 | question | where to look |
 |---|---|
-| Do hunters learn to forage? | `harvest_per_hunter` and `hunters` rising over a run; compare against `--hset policy=random` on the same seed with `plot.py runs/a runs/b` |
+| Do hunters learn to forage? | the number of `hunters` the world sustains (set `--hset n_max` high enough that the cap is never reached), against `--hset policy=straight` and `--hset policy=random` on the same seed: `plot.py runs/brain runs/straight runs/random` |
 | Does their memory model the world? | `probe.py`: hidden quantities where **latent > raw and latent > random** |
 | Does the world model learn anything? | `wm_mse` falling below `copy_mse` |
 | Do the cells answer back? | over a long run, does harvest per hunter fall while hunters stay smart? Inspect top genomes for changes in detach, divide and signals near danger |

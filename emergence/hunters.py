@@ -42,7 +42,7 @@ WM_C = 3                         # world model predicts alive, cell energy, food
 
 @dataclass
 class HunterConfig:
-    n_max: int = 512             # hunter slots
+    n_max: int = 2048            # hunter slots (keep above the population the world can feed)
     n_start: int = 96
     n_min: int = 16              # if fewer live, respawn up to this (logged)
     patch: int = 15
@@ -65,7 +65,8 @@ class HunterConfig:
     mark_deposit: float = 0.5
 
     learn: bool = True
-    policy: str = "brain"        # "brain" or "random" (control)
+    policy: str = "brain"        # "brain", or controls: "random", "straight" (keeps a heading)
+    turn: float = 0.05           # "straight" control: chance per step to pick a new heading
     lr: float = 5e-4
     rollout: int = 16
     gamma: float = 0.99
@@ -137,6 +138,7 @@ class Hunters:
         self.h = z(N, hc.hidden)
         self.last_a = torch.zeros(N, dtype=torch.long, device=self.dev)
         self.last_r = z(N)
+        self.heading = torch.ones(N, dtype=torch.long, device=self.dev)   # for "straight"
         self.trace = z(self.H, self.W)
         self.mark = z(self.H, self.W)
         self.brain = Brain(hc).to(self.dev)
@@ -149,7 +151,7 @@ class Hunters:
         self.stats = {"births": 0, "deaths": 0, "respawns": 0, "harvest": 0.0, "updates": 0,
                       "loss_pi": 0.0, "loss_v": 0.0, "wm_mse": 0.0, "copy_mse": 0.0,
                       "entropy": 0.0, "reward": 0.0}
-        self._harvest_acc, self._steps_acc = 0.0, 0
+        self._harvest_acc, self._steps_acc, self._alive_acc = 0.0, 0, 0.0
         self.spawn(hc.n_start)
 
     # ------------------------------------------------------------- population
@@ -171,6 +173,7 @@ class Hunters:
         self.h[free] = 0          # a new hunter remembers nothing
         self.last_a[free] = 0
         self.last_r[free] = 0
+        self.heading[free] = 1 + (self._rand(k) * 4).long().clamp(max=3)
         self.alive[free] = True
         self._reset[free] = True
         return free
@@ -226,6 +229,12 @@ class Hunters:
             self.h0 = self.h.clone()
         if hc.policy == "random":
             a = (self._rand(hc.n_max) * N_ACT).long().clamp(max=N_ACT - 1)
+        elif hc.policy == "straight":
+            # control: walk straight ahead, occasionally turn; never write marks
+            turn = self._rand(hc.n_max) < hc.turn
+            new = 1 + (self._rand(hc.n_max) * 4).long().clamp(max=3)
+            self.heading = torch.where(turn, new, self.heading)
+            a = self.heading.clone()
         else:
             a = torch.distributions.Categorical(logits=logits).sample()
         move, write = a % N_MOVES, a // N_MOVES
@@ -302,6 +311,7 @@ class Hunters:
 
         self._harvest_acc += float(gain.sum())
         self._steps_acc += 1
+        self._alive_acc += float(valid.sum())       # hunter-steps actually lived
 
     def eat(self):
         hc, w = self.hc, self.w
@@ -407,13 +417,14 @@ class Hunters:
              "hunter_energy": float(self.E[a].mean()) if n else 0.0,
              "hunter_age": float(self.age[a].mean()) if n else 0.0,
              "harvest_per_step": self._harvest_acc / max(self._steps_acc, 1),
-             "harvest_per_hunter": self._harvest_acc / max(self._steps_acc, 1) / max(n, 1),
+             # per hunter-step lived over the interval (not divided by the end count)
+             "harvest_per_hunter": self._harvest_acc / max(self._alive_acc, 1.0),
              "hunter_births": self.stats["births"], "hunter_deaths": self.stats["deaths"],
              "hunter_respawns": self.stats["respawns"], "updates": self.stats["updates"],
              "reward": self.stats["reward"], "entropy": self.stats["entropy"],
              "wm_mse": self.stats["wm_mse"], "copy_mse": self.stats["copy_mse"],
              "mark_mean": float(self.mark.mean())}
-        self._harvest_acc, self._steps_acc = 0.0, 0
+        self._harvest_acc, self._steps_acc, self._alive_acc = 0.0, 0, 0.0
         return m
 
     # ------------------------------------------------------------- persistence

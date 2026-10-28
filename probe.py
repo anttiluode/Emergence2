@@ -10,11 +10,12 @@ directly: does the hunter's memory h encode things it was never shown?
 For each hidden quantity we fit a ridge-regression probe and report test R^2 (fit on the
 first 70% of the run, tested on the last 30%) from three inputs:
 
-  latent   the trained brain's memory h
-  raw      the hunter's raw observation (the full 15x15x10 patch + own energy)
-  random   the memory h of an untrained brain with the same architecture, run on
-           exactly the same observations (does structure come from learning, or from
-           any recurrent net integrating over time?)
+  latent   the trained brain's memory h, formed from that step's observation
+  raw      that same observation (the full 15x15x10 patch + own energy)
+  random   the memory h of an untrained brain with the same architecture, fed exactly
+           the same observations at the same moments (does structure come from
+           learning, or from any recurrent net integrating over time?)
+All three, and the labels, refer to the moment the hunter observes, before it moves.
 
 A quantity the latent predicts better than both raw and random is information the brain
 built for itself: integrated over time, or inferred from what it saw. A linear probe that
@@ -116,26 +117,29 @@ def main():
     feats = {"latent": [], "raw": [], "random": []}
     labs, pending = {}, []
     for t in range(a.steps):
-        # the untrained twin sees exactly what the hunters see
+        w.step()
+        # The exact observation the hunters are about to act on. hu.step() computes the
+        # same tensors first thing, so the trained brain, the untrained twin, the raw
+        # features and the labels all refer to the same moment and the same positions.
         obs = hu.patches(hu.fields())
         prop = hu.prop()
         with torch.no_grad():
             h_fresh = fresh.core(obs, prop, h_fresh * (~hu._reset).float()[:, None])
-        w.step()
-        hu.step()
-        h_fresh = h_fresh * hu.alive.float()[:, None]
-        if t % a.every == 0:
+        sample = t % a.every == 0
+        if sample:
             idx = torch.nonzero(hu.alive).flatten()
-            if idx.numel():
-                feats["latent"].append(hu.h[idx].cpu())
-                o = hu.patches(hu.fields())[idx].reshape(idx.numel(), -1)
-                feats["raw"].append(torch.cat([o, hu.E[idx, None]], 1).cpu())
-                feats["random"].append(h_fresh[idx].cpu())
-                for k, v in labels(w, hu, idx).items():
-                    labs.setdefault(k, []).append(v.cpu())
-                later = labs.setdefault("cells_in_view_later", [])
-                later.append(None)
-                pending.append((t + LOOKAHEAD, hu.y[idx].clone(), hu.x[idx].clone(), len(later) - 1))
+            sample = idx.numel() > 0
+        if sample:
+            feats["raw"].append(torch.cat([obs[idx].reshape(idx.numel(), -1), hu.E[idx, None]], 1).cpu())
+            feats["random"].append(h_fresh[idx].cpu())
+            for k, v in labels(w, hu, idx).items():
+                labs.setdefault(k, []).append(v.cpu())
+            later = labs.setdefault("cells_in_view_later", [])
+            later.append(None)
+            pending.append((t + LOOKAHEAD, hu.y[idx].clone(), hu.x[idx].clone(), len(later) - 1))
+        hu.step()                                  # h is now the memory formed from obs
+        if sample:
+            feats["latent"].append(hu.h[idx].cpu())
         # fill in the future-prey label once its time has come
         while pending and pending[0][0] <= t:
             _, py, px, k = pending.pop(0)
