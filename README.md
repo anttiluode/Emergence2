@@ -1,5 +1,7 @@
 # Emergence 2
 
+![pic](pic.png)
+
 **The next level: a learning AI that lives off the world of [Emergence](https://github.com/anttiluode/Emergence).**
 
 Emergence grew a world from token genomes: cells that eat, share, steal, divide and evolve
