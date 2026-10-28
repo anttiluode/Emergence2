@@ -87,8 +87,9 @@ the machinery works; they say nothing yet about what a long run on your GPU will
   in every 400-step window, against **0.053–0.064** for random walkers on the same prey.
   That is roughly 40% more, reached within the first 25 updates. Its policy entropy then
   collapsed to about 0.3, so the default entropy bonus was raised from 0.01 to 0.03.
-  With the new defaults the brain bit **0.075–0.086** over 2,000 steps while keeping its
-  entropy near 2 (still exploring). `sanity.py` reproduces this check.
+  With the new defaults the brain kept improving over 4,000 steps, from **0.075** in the
+  first window to **0.093** in the last (about 50% above random), while its entropy
+  stayed near 2 (still exploring). `sanity.py` reproduces this check.
 - **The first ecological trap was real, and fixed.** In the first full runs, children were
   born on their parent's square and copied its policy, so they followed it onto the patch
   it was already eating and starved. The brain did worse than random walkers. Children now
